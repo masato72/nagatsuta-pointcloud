@@ -1,0 +1,896 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>点群ビューア - nagatsuta</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #111; font-family: -apple-system, "Segoe UI", sans-serif; }
+  #container { position: absolute; inset: 0; }
+  #overlay {
+    position: absolute; top: 10px; left: 10px; z-index: 10;
+    background: rgba(20,20,20,0.8); color: #eee; padding: 6px 8px;
+    border-radius: 8px; font-size: 11px; line-height: 1.35; width: 125px;
+    max-width: calc(100vw - 20px);
+    backdrop-filter: blur(4px);
+  }
+  #overlay b { color: #fff; user-select: none; -webkit-user-select: none; }
+  .overlayHeader { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  #collapseBtn {
+    padding: 0; width: 40px; height: 40px; font-size: 16px; line-height: 1;
+    flex: 0 0 auto; touch-action: manipulation;
+  }
+  #overlay.collapsed { width: auto; padding: 4px 6px; }
+  #overlay.collapsed #overlayBody { display: none; }
+  #overlay.collapsed #collapseBtn { width: 40px; height: 40px; }
+  #overlay hr { border: none; border-top: 1px solid #444; margin: 5px 0; }
+  .row { display: flex; align-items: center; gap: 4px; margin: 3px 0; flex-wrap: wrap; }
+  .row label { flex: 0 0 auto; color: #ccc; font-size: 11px; }
+  .row input[type=range] { flex: 1 1 auto; }
+  .row button { flex: 1 1 auto; min-width: 0; }
+  .row select {
+    background: #2a2a2a; color: #eee; border: 1px solid #555; border-radius: 6px; padding: 2px 5px; font-size: 11px;
+    flex: 1 1 auto; min-width: 0;
+  }
+  .sizeVal { width: 46px; text-align: right; font-family: monospace; font-size: 11px; color: #9cf; }
+  button {
+    background: #2a2a2a; color: #eee; border: 1px solid #555; border-radius: 6px;
+    padding: 4px 8px; font-size: 11px; cursor: pointer; touch-action: manipulation;
+  }
+  button:hover { background: #383838; }
+  button.active { background: #2f6fb3; border-color: #4a90d9; color: #fff; }
+  #measureList { max-height: 110px; overflow-y: auto; font-family: monospace; font-size: 10px; margin-top: 4px; }
+  #measureList .measureRow { padding: 2px 0; color: #ddd; border-bottom: 1px solid #2a2a2a; }
+  #loading {
+    position: absolute; inset: 0; z-index: 30; display: flex;
+    align-items: center; justify-content: center; color: #eee;
+    background: rgba(0,0,0,0.6); font-size: 15px;
+  }
+  #loading.hide { display: none; }
+  #stats {
+    position: absolute; bottom: 10px; left: 12px; z-index: 10;
+    color: #999; font-size: 12px; font-family: monospace;
+  }
+  .measureLabel {
+    position: absolute; z-index: 15; transform: translate(-50%, -100%);
+    background: rgba(255, 210, 0, 0.9); color: #111; font-weight: 600;
+    font-size: 12px; padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+    pointer-events: none;
+  }
+  .areaLabel, .pinLabel {
+    position: absolute; z-index: 15; transform: translate(-50%, -100%);
+    font-weight: 600; font-size: 12px; padding: 2px 6px; border-radius: 4px;
+    white-space: nowrap; pointer-events: none;
+  }
+  .areaLabel { background: rgba(90, 230, 140, 0.92); color: #111; }
+  .pinLabel { background: rgba(255, 160, 0, 0.95); color: #111; }
+  #areaResult { font-size: 11px; color: #8f8; margin: 3px 0; }
+  #pinList { max-height: 100px; overflow-y: auto; font-family: monospace; font-size: 11px; margin-top: 4px; }
+  #pinList div { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: #ddd; }
+  #pinList .pinNote { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pinList button { padding: 1px 7px; font-size: 10px; }
+  .coordLabel {
+    position: absolute; z-index: 15; transform: translate(-50%, -100%);
+    background: rgba(0, 220, 255, 0.92); color: #111; font-weight: 600;
+    font-size: 12px; padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+    pointer-events: none;
+  }
+  #coordList { max-height: 120px; overflow-y: auto; font-family: monospace; font-size: 10px; margin-top: 4px; }
+  #coordList .coordRow { display: flex; align-items: center; gap: 4px; padding: 2px 0; color: #ddd; border-bottom: 1px solid #2a2a2a; }
+  #coordList .coordXYZ { flex: 1 1 auto; line-height: 1.35; }
+  #coordList button { padding: 1px 7px; font-size: 10px; }
+</style>
+</head>
+<body>
+<div id="container"></div>
+
+<div id="overlay">
+  <div class="overlayHeader">
+    <b>点群ビューア</b>
+    <button id="collapseBtn" title="折りたたむ">▾</button>
+  </div>
+<div id="overlayBody">
+  <div>左ドラッグ: 回転 / 右ドラッグ: 移動 / ホイール: ズーム</div>
+  <div id="pointInfo">読み込み中...</div>
+  <hr>
+  <div class="row" style="justify-content:space-between;">
+    <label>点サイズ</label>
+    <span class="sizeVal" id="sizeVal">-</span>
+  </div>
+  <input type="range" id="sizeSlider" min="1" max="100" value="30" style="width:100%;">
+  <hr>
+  <div class="row">
+    <button id="measureBtn">📏 距離測定</button>
+    <button id="clearBtn">クリア</button>
+  </div>
+  <div id="measureHint" style="color:#999; font-size:11px; display:none;">
+    点群上を2回クリックして2点間の距離を測定します
+  </div>
+  <div id="measureList"></div>
+  <hr>
+  <div class="row">
+    <button id="areaModeBtn">📐 面積計測</button>
+    <button id="areaFinishBtn" style="display:none;">確定</button>
+    <button id="areaClearBtn">クリア</button>
+  </div>
+  <div id="areaHint" style="color:#999; font-size:11px; display:none;">
+    点群上をクリックして頂点を追加(3点以上)。「確定」で多角形を閉じ、水平投影面積を計算します
+  </div>
+  <div id="areaResult" style="display:none;"></div>
+  <hr>
+  <div class="row">
+    <button id="pinModeBtn">📌 ピン留め</button>
+    <button id="pinClearBtn">クリア</button>
+  </div>
+  <div id="pinHint" style="color:#999; font-size:11px; display:none;">
+    点群上をクリックしてピンを追加し、メモを入力します
+  </div>
+  <div id="pinList"></div>
+  <hr>
+  <div class="row">
+    <button id="coordModeBtn">📍 座標表示</button>
+    <button id="coordClearBtn">クリア</button>
+  </div>
+  <div id="coordHint" style="color:#999; font-size:11px; display:none;">
+    点群上をクリックすると、その点のX,Y,Z座標(元データの測量座標系。Zが高さ)を表示します
+  </div>
+  <div id="coordList"></div>
+  <hr>
+  <div class="row">
+    <button id="clipToggleBtn">✂️ 断面カット</button>
+    <button id="clipFlipBtn">反転</button>
+  </div>
+  <div class="row" id="clipAxisRow" style="display:none;">
+    <label>軸</label>
+    <select id="clipAxis">
+      <option value="x">X</option>
+      <option value="y">Y</option>
+      <option value="z">Z (高さ)</option>
+    </select>
+  </div>
+  <div id="clipPosRow" style="display:none;">
+    <div class="row" style="justify-content:space-between;">
+      <label>位置</label>
+      <span class="sizeVal" id="clipVal">-</span>
+    </div>
+    <input type="range" id="clipSlider" min="0" max="1000" value="500" style="width:100%;">
+  </div>
+</div>
+</div>
+
+<div id="stats"></div>
+
+<div id="loading">点群を読み込み中...</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+
+const PLY_FILE = 'nagatsuta_light.ply';
+
+const loading = document.getElementById('loading');
+const overlayEl = document.getElementById('overlay');
+const collapseBtn = document.getElementById('collapseBtn');
+collapseBtn.addEventListener('click', () => {
+  const collapsed = overlayEl.classList.toggle('collapsed');
+  collapseBtn.textContent = collapsed ? '▸' : '▾';
+  collapseBtn.title = collapsed ? '展開する' : '折りたたむ';
+});
+const pointInfo = document.getElementById('pointInfo');
+const statsEl = document.getElementById('stats');
+const sizeSlider = document.getElementById('sizeSlider');
+const sizeVal = document.getElementById('sizeVal');
+const measureBtn = document.getElementById('measureBtn');
+const clearBtn = document.getElementById('clearBtn');
+const measureHint = document.getElementById('measureHint');
+const measureList = document.getElementById('measureList');
+const clipToggleBtn = document.getElementById('clipToggleBtn');
+const clipFlipBtn = document.getElementById('clipFlipBtn');
+const clipAxisRow = document.getElementById('clipAxisRow');
+const clipAxisSelect = document.getElementById('clipAxis');
+const clipPosRow = document.getElementById('clipPosRow');
+const clipSlider = document.getElementById('clipSlider');
+const clipVal = document.getElementById('clipVal');
+const areaModeBtn = document.getElementById('areaModeBtn');
+const areaFinishBtn = document.getElementById('areaFinishBtn');
+const areaClearBtn = document.getElementById('areaClearBtn');
+const areaHint = document.getElementById('areaHint');
+const areaResult = document.getElementById('areaResult');
+const pinModeBtn = document.getElementById('pinModeBtn');
+const pinClearBtn = document.getElementById('pinClearBtn');
+const pinHint = document.getElementById('pinHint');
+const pinList = document.getElementById('pinList');
+const coordModeBtn = document.getElementById('coordModeBtn');
+const coordClearBtn = document.getElementById('coordClearBtn');
+const coordHint = document.getElementById('coordHint');
+const coordList = document.getElementById('coordList');
+
+let scene, camera, renderer, controls, pointCloud, raycaster;
+let sceneScale = 1; // バウンディングスフィア半径。サイズ調整の基準にする
+let activeTool = 'none'; // 'none' | 'measure' | 'area' | 'pin' | 'coord'（クリック系ツールは排他）
+
+let measureMode = false;
+let pendingPoint = null;   // 測定中の1点目
+let pendingMarker = null;
+const measurements = []; // {a, b, markerA, markerB, line, label, dist}
+
+// 面積計測・体積計測（別コマンドだが多角形クリックの仕組みは共通）
+function makePolygonTool(config) {
+  return Object.assign({
+    points: [], markers: [], line: null, label: null, finished: false, value: 0,
+  }, config);
+}
+const areaTool = makePolygonTool({
+  key: 'area', color: 0x50ff90, labelClass: 'areaLabel',
+  modeBtn: areaModeBtn, finishBtn: areaFinishBtn, clearBtn: areaClearBtn,
+  hintEl: areaHint, resultEl: areaResult,
+});
+
+// 注記ピン
+const pins = []; // {marker, label, note, position}
+
+// 座標表示（Y-up変換・中心化前の元の測量座標系に戻して表示する）
+let originOffset = new THREE.Vector3(); // center()で差し引かれたオフセット（変換後・中心化前の座標系）
+const coordPoints = []; // {marker, label, position, orig: {x,y,z}}
+
+let clipEnabled = false;
+let clipFlip = false;
+const clipPlane = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);
+let clipBounds = null; // 現在の点群のバウンディングボックス（センタリング後）
+
+function createCircleTexture() {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0.0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.75, 'rgba(255,255,255,1)');
+  grad.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
+const circleTexture = createCircleTexture();
+
+function initScene() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x111111);
+
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 10000);
+  camera.position.set(0, 0, 5);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.localClippingEnabled = true;
+  document.getElementById('container').appendChild(renderer.domElement);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+
+  raycaster = new THREE.Raycaster();
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  setupMeasurement();
+  setupPolygonTool(areaTool);
+  setupPinTool();
+  setupCoordTool();
+  setupInteraction();
+  setupClipping();
+  animate();
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+  updateAllLabels();
+}
+
+function loadPlyArrayBuffer(arrayBuffer, label) {
+  const loader = new PLYLoader();
+    const geometry = loader.parse(arrayBuffer);
+
+    // 点群データは高さ方向がZ軸（測量系）だが、Three.js/OrbitControlsの標準はY-upなので
+    // 読み込み時に-90°X回転して座標をY-upへ揃える（Y=旧Z高さ, Z=-旧Y）。
+    // これによりOrbitControlsのデフォルト挙動のまま、水平ドラッグが正しく鉛直軸回りの回転になる。
+    {
+      const pos = geometry.getAttribute('position');
+      const arr = pos.array;
+      for (let i = 0; i < arr.length; i += 3) {
+        const oy = arr[i + 1];
+        const oz = arr[i + 2];
+        arr[i + 1] = oz;
+        arr[i + 2] = -oy;
+      }
+      pos.needsUpdate = true;
+    }
+
+    if (pointCloud) {
+      scene.remove(pointCloud);
+      pointCloud.geometry.dispose();
+      pointCloud.material.dispose();
+    }
+    clearMeasurements();
+    clearPolygonTool(areaTool);
+    clearPins();
+    clearCoords();
+    setActiveTool('none');
+
+    const hasColor = !!geometry.getAttribute('color');
+    const material = new THREE.PointsMaterial({
+      sizeAttenuation: true,
+      vertexColors: hasColor,
+      color: hasColor ? 0xffffff : 0xb4b4b4,
+      map: circleTexture,
+      alphaTest: 0.4,
+      transparent: false,
+      clippingPlanes: [],
+    });
+
+    // PLYLoaderは0-255のuint8色を0-1に正規化しないことがあるため補正
+    const colorAttr = geometry.getAttribute('color');
+    if (colorAttr && colorAttr.array instanceof Uint8Array) {
+      const normalized = new Float32Array(colorAttr.array.length);
+      for (let i = 0; i < colorAttr.array.length; i++) {
+        normalized[i] = colorAttr.array[i] / 255;
+      }
+      geometry.setAttribute('color', new THREE.BufferAttribute(normalized, 3));
+    }
+
+    pointCloud = new THREE.Points(geometry, material);
+
+    // 中心をシーン原点へ、カメラをバウンディングスフィアに合わせて配置
+    // 座標表示機能のため、中心化で差し引かれるオフセットを先に控えておく
+    geometry.computeBoundingBox();
+    geometry.boundingBox.getCenter(originOffset);
+    geometry.center();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+
+    const sphere = geometry.boundingSphere;
+    sceneScale = sphere ? sphere.radius : 5;
+    const dist = sceneScale * 2.2;
+    camera.position.set(dist * 0.5, dist * 0.3, dist);
+    // 近接クリップ面はシーン規模に関係なく小さく固定し、地面や細部までズームインしても消えないようにする
+    camera.near = 0.005;
+    camera.far = dist * 20;
+    camera.updateProjectionMatrix();
+    controls.target.set(0, 0, 0);
+    controls.minDistance = 0.02;
+    controls.update();
+
+    scene.add(pointCloud);
+
+    // 点の見た目サイズをスケールに応じて初期化（隙間が目立たない程度に少し大きめ）
+    sizeSlider.value = 30;
+    applyPointSize();
+
+    // 断面カットの基準となるバウンディングボックスをリセット
+    clipBounds = geometry.boundingBox.clone();
+    resetClipping();
+
+  const count = geometry.getAttribute('position').count;
+  pointInfo.textContent = `${label}: ${count.toLocaleString()} 点`;
+  statsEl.textContent = `points: ${count.toLocaleString()}`;
+}
+
+const MIN_POINT_SIZE = 0.003; // 0.3cm
+const MAX_POINT_SIZE = 0.08;  // 8cm
+
+function applyPointSize() {
+  if (!pointCloud) return;
+  // スライダー(1-100)を、シーン規模によらず0.3cm〜8cmの絶対サイズへ変換
+  const t = (sizeSlider.value - 1) / 99; // 0 - 1.0
+  const size = MIN_POINT_SIZE + t * (MAX_POINT_SIZE - MIN_POINT_SIZE);
+  pointCloud.material.size = size;
+  raycaster.params.Points.threshold = size * 1.5;
+  sizeVal.textContent = (size * 100).toFixed(2) + 'cm';
+}
+sizeSlider.addEventListener('input', applyPointSize);
+
+async function loadInitial() {
+  try {
+    const res = await fetch(PLY_FILE);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = await res.arrayBuffer();
+    loadPlyArrayBuffer(buf, PLY_FILE);
+  } catch (e) {
+    pointInfo.textContent = '読み込みエラー: ' + e.message;
+  } finally {
+    loading.classList.add('hide');
+  }
+}
+
+// ------------------------------------------------------------------
+// クリック系ツールの排他制御 + 共通ポインタ処理
+// ------------------------------------------------------------------
+function setActiveTool(tool) {
+  measureMode = false;
+  measureBtn.classList.remove('active');
+  measureHint.style.display = 'none';
+  cancelPending();
+
+  areaTool.modeBtn.classList.remove('active');
+  areaTool.hintEl.style.display = 'none';
+  areaTool.finishBtn.style.display = 'none';
+
+  pinModeBtn.classList.remove('active');
+  pinHint.style.display = 'none';
+
+  coordModeBtn.classList.remove('active');
+  coordHint.style.display = 'none';
+
+  activeTool = tool;
+
+  if (tool === 'measure') {
+    measureMode = true;
+    measureBtn.classList.add('active');
+    measureHint.style.display = 'block';
+  } else if (tool === 'area') {
+    areaTool.modeBtn.classList.add('active');
+    areaTool.hintEl.style.display = 'block';
+    if (areaTool.points.length >= 3 && !areaTool.finished) areaTool.finishBtn.style.display = 'inline-block';
+  } else if (tool === 'pin') {
+    pinModeBtn.classList.add('active');
+    pinHint.style.display = 'block';
+  } else if (tool === 'coord') {
+    coordModeBtn.classList.add('active');
+    coordHint.style.display = 'block';
+  }
+}
+
+function setupInteraction() {
+  let downPos = null;
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    downPos = { x: e.clientX, y: e.clientY };
+  });
+  renderer.domElement.addEventListener('pointerup', (e) => {
+    if (!pointCloud || !downPos) { downPos = null; return; }
+    const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
+    downPos = null;
+    if (moved > 5) return; // ドラッグ（回転操作）とみなしクリック扱いしない
+    if (activeTool === 'measure') handleMeasureClick(e);
+    else if (activeTool === 'area') handlePolygonClick(e, areaTool);
+    else if (activeTool === 'pin') handlePinClick(e);
+    else if (activeTool === 'coord') handleCoordClick(e);
+  });
+}
+
+function raycastFromEvent(e) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const mouse = new THREE.Vector2(
+    ((e.clientX - rect.left) / rect.width) * 2 - 1,
+    -((e.clientY - rect.top) / rect.height) * 2 + 1
+  );
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObject(pointCloud);
+  return hits.length ? hits[0].point.clone() : null;
+}
+
+// ------------------------------------------------------------------
+// 距離測定機能
+// ------------------------------------------------------------------
+function setupMeasurement() {
+  measureBtn.addEventListener('click', () => setActiveTool(activeTool === 'measure' ? 'none' : 'measure'));
+  clearBtn.addEventListener('click', clearMeasurements);
+}
+
+function handleMeasureClick(e) {
+  const point = raycastFromEvent(e);
+  if (!point) return;
+
+  if (!pendingPoint) {
+    pendingPoint = point;
+    pendingMarker = makeMarker(point, 0xff5050);
+    scene.add(pendingMarker);
+  } else {
+    const a = pendingPoint;
+    const b = point;
+    const markerA = pendingMarker;
+    const markerB = makeMarker(b, 0xff5050);
+    scene.add(markerB);
+
+    const lineGeom = new THREE.BufferGeometry().setFromPoints([a, b]);
+    const line = new THREE.Line(lineGeom, new THREE.LineBasicMaterial({ color: 0xffd200 }));
+    scene.add(line);
+
+    const dist = a.distanceTo(b);
+    const horiz = Math.hypot(a.x - b.x, a.z - b.z); // 水平距離（Y=高さのため、X,Z平面上の距離）
+    const vert = Math.abs(a.y - b.y); // 高低差
+    const label = document.createElement('div');
+    label.className = 'measureLabel';
+    label.innerHTML = `斜距離: ${dist.toFixed(3)} m<br>水平: ${horiz.toFixed(3)} m<br>高低差: ${vert.toFixed(3)} m`;
+    document.body.appendChild(label);
+
+    measurements.push({ a, b, markerA, markerB, line, label, dist, horiz, vert });
+    renderMeasureList();
+
+    pendingPoint = null;
+    pendingMarker = null;
+  }
+}
+
+function makeMarker(pos, color) {
+  const geom = new THREE.SphereGeometry(Math.max(sceneScale / 250, 0.005), 12, 12);
+  const mat = new THREE.MeshBasicMaterial({ color });
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.position.copy(pos);
+  return mesh;
+}
+
+function cancelPending() {
+  if (pendingMarker) {
+    scene.remove(pendingMarker);
+    pendingMarker.geometry.dispose();
+    pendingMarker.material.dispose();
+  }
+  pendingPoint = null;
+  pendingMarker = null;
+}
+
+function clearMeasurements() {
+  cancelPending();
+  for (const m of measurements) {
+    scene.remove(m.markerA, m.markerB, m.line);
+    m.markerA.geometry.dispose(); m.markerA.material.dispose();
+    m.markerB.geometry.dispose(); m.markerB.material.dispose();
+    m.line.geometry.dispose(); m.line.material.dispose();
+    m.label.remove();
+  }
+  measurements.length = 0;
+  renderMeasureList();
+}
+
+function renderMeasureList() {
+  measureList.innerHTML = measurements
+    .map((m, i) => `<div class="measureRow">#${i + 1}  斜距離: ${m.dist.toFixed(3)}m  水平: ${m.horiz.toFixed(3)}m  高低差: ${m.vert.toFixed(3)}m</div>`)
+    .join('');
+}
+
+function projectToScreen(worldPos) {
+  const v = worldPos.clone().project(camera);
+  return {
+    x: (v.x * 0.5 + 0.5) * window.innerWidth,
+    y: (-v.y * 0.5 + 0.5) * window.innerHeight,
+    visible: v.z < 1,
+  };
+}
+
+function updateAllLabels() {
+  for (const m of measurements) {
+    const mid = m.a.clone().add(m.b).multiplyScalar(0.5);
+    const p = projectToScreen(mid);
+    m.label.style.left = p.x + 'px';
+    m.label.style.top = p.y + 'px';
+    m.label.style.display = p.visible ? 'block' : 'none';
+  }
+
+  if (areaTool.label && areaTool.label._centroid) {
+    const p = projectToScreen(areaTool.label._centroid);
+    areaTool.label.style.left = p.x + 'px';
+    areaTool.label.style.top = p.y + 'px';
+    areaTool.label.style.display = p.visible ? 'block' : 'none';
+  }
+
+  for (const pin of pins) {
+    const p = projectToScreen(pin.position);
+    pin.label.style.left = p.x + 'px';
+    pin.label.style.top = p.y + 'px';
+    pin.label.style.display = p.visible ? 'block' : 'none';
+  }
+
+  for (const cp of coordPoints) {
+    const p = projectToScreen(cp.position);
+    cp.label.style.left = p.x + 'px';
+    cp.label.style.top = p.y + 'px';
+    cp.label.style.display = p.visible ? 'block' : 'none';
+  }
+}
+
+// ------------------------------------------------------------------
+// 面積計測機能（多角形の頂点をクリックで指定 → 水平投影面積を算出）
+// ------------------------------------------------------------------
+function setupPolygonTool(tool) {
+  tool.modeBtn.addEventListener('click', () => setActiveTool(activeTool === tool.key ? 'none' : tool.key));
+  tool.finishBtn.addEventListener('click', () => finishPolygon(tool));
+  tool.clearBtn.addEventListener('click', () => clearPolygonTool(tool));
+}
+
+function handlePolygonClick(e, tool) {
+  if (tool.finished) return; // 確定後に続けたい場合はクリアしてやり直す
+  const point = raycastFromEvent(e);
+  if (!point) return;
+
+  tool.points.push(point);
+  const marker = makeMarker(point, tool.color);
+  scene.add(marker);
+  tool.markers.push(marker);
+
+  updatePolygonLine(tool, tool.points);
+  tool.finishBtn.style.display = tool.points.length >= 3 ? 'inline-block' : 'none';
+}
+
+function updatePolygonLine(tool, points) {
+  if (tool.line) {
+    scene.remove(tool.line);
+    tool.line.geometry.dispose();
+    tool.line.material.dispose();
+    tool.line = null;
+  }
+  if (points.length < 2) return;
+  const geom = new THREE.BufferGeometry().setFromPoints(points);
+  tool.line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: tool.color }));
+  scene.add(tool.line);
+}
+
+function finishPolygon(tool) {
+  if (tool.points.length < 3 || tool.finished) return;
+  tool.finished = true;
+  tool.finishBtn.style.display = 'none';
+
+  // 多角形を閉じたラインとして再描画
+  updatePolygonLine(tool, tool.points.concat([tool.points[0]]));
+
+  // 水平投影面積（シューレースの公式、XZ平面に投影。Yは高さ扱い）
+  let sum = 0;
+  for (let i = 0; i < tool.points.length; i++) {
+    const p1 = tool.points[i];
+    const p2 = tool.points[(i + 1) % tool.points.length];
+    sum += p1.x * p2.z - p2.x * p1.z;
+  }
+  tool.value = Math.abs(sum) / 2;
+
+  const centroid = tool.points
+    .reduce((acc, p) => acc.add(p), new THREE.Vector3())
+    .multiplyScalar(1 / tool.points.length);
+  tool.label = document.createElement('div');
+  tool.label.className = tool.labelClass;
+  tool.label._centroid = centroid;
+  document.body.appendChild(tool.label);
+
+  updatePolygonResult(tool);
+}
+
+function updatePolygonResult(tool) {
+  if (!tool.finished) return;
+  tool.resultEl.style.display = 'block';
+  tool.resultEl.textContent = `面積: ${tool.value.toFixed(2)} m²`;
+  if (tool.label) tool.label.textContent = `${tool.value.toFixed(1)}m²`;
+}
+
+function clearPolygonTool(tool) {
+  for (const m of tool.markers) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); }
+  tool.markers = [];
+  if (tool.line) { scene.remove(tool.line); tool.line.geometry.dispose(); tool.line.material.dispose(); tool.line = null; }
+  if (tool.label) { tool.label.remove(); tool.label = null; }
+  tool.points = [];
+  tool.finished = false;
+  tool.value = 0;
+  tool.finishBtn.style.display = 'none';
+  tool.resultEl.style.display = 'none';
+}
+
+// ------------------------------------------------------------------
+// 注記ピン機能（クリックした位置にメモ付きのピンを立てる）
+// ------------------------------------------------------------------
+function setupPinTool() {
+  pinModeBtn.addEventListener('click', () => setActiveTool(activeTool === 'pin' ? 'none' : 'pin'));
+  pinClearBtn.addEventListener('click', clearPins);
+}
+
+function handlePinClick(e) {
+  const point = raycastFromEvent(e);
+  if (!point) return;
+
+  const note = window.prompt('メモを入力してください(空欄可):', '');
+  if (note === null) return; // キャンセル
+
+  const marker = makeMarker(point, 0xffa500);
+  scene.add(marker);
+
+  const label = document.createElement('div');
+  label.className = 'pinLabel';
+  document.body.appendChild(label);
+
+  pins.push({ marker, label, note, position: point });
+  relabelPins();
+  renderPinList();
+}
+
+function relabelPins() {
+  pins.forEach((p, i) => {
+    p.label.textContent = `📌${i + 1}` + (p.note ? `: ${p.note}` : '');
+  });
+}
+
+function renderPinList() {
+  pinList.innerHTML = pins.map((p, i) => `
+    <div>
+      <span>📌${i + 1}</span>
+      <span class="pinNote">${escapeHtml(p.note || '(メモなし)')}</span>
+      <button data-idx="${i}" class="pinDelBtn">×</button>
+    </div>
+  `).join('');
+  pinList.querySelectorAll('.pinDelBtn').forEach(btn => {
+    btn.addEventListener('click', () => removePin(parseInt(btn.dataset.idx, 10)));
+  });
+}
+
+function removePin(idx) {
+  const p = pins[idx];
+  if (!p) return;
+  scene.remove(p.marker);
+  p.marker.geometry.dispose();
+  p.marker.material.dispose();
+  p.label.remove();
+  pins.splice(idx, 1);
+  relabelPins();
+  renderPinList();
+}
+
+function clearPins() {
+  for (const p of pins) {
+    scene.remove(p.marker);
+    p.marker.geometry.dispose();
+    p.marker.material.dispose();
+    p.label.remove();
+  }
+  pins.length = 0;
+  renderPinList();
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ------------------------------------------------------------------
+// 座標表示機能（クリックした点の元データ座標系（X,Y,Z）を表示する）
+// ------------------------------------------------------------------
+function setupCoordTool() {
+  coordModeBtn.addEventListener('click', () => setActiveTool(activeTool === 'coord' ? 'none' : 'coord'));
+  coordClearBtn.addEventListener('click', clearCoords);
+}
+
+// 表示用のY-up・中心化座標を、元データの測量座標系(X,Y,Z / Zが高さ)へ逆変換する
+function toOriginalCoords(point) {
+  const ux = point.x + originOffset.x;
+  const uy = point.y + originOffset.y;
+  const uz = point.z + originOffset.z;
+  return { x: ux, y: -uz, z: uy };
+}
+
+function handleCoordClick(e) {
+  const point = raycastFromEvent(e);
+  if (!point) return;
+
+  const orig = toOriginalCoords(point);
+  const marker = makeMarker(point, 0x00e5ff);
+  scene.add(marker);
+
+  const label = document.createElement('div');
+  label.className = 'coordLabel';
+  document.body.appendChild(label);
+
+  coordPoints.push({ marker, label, position: point, orig });
+  relabelCoords();
+  renderCoordList();
+}
+
+function relabelCoords() {
+  coordPoints.forEach((cp, i) => {
+    cp.label.textContent = `📍${i + 1}`;
+  });
+}
+
+function renderCoordList() {
+  coordList.innerHTML = coordPoints.map((cp, i) => `
+    <div class="coordRow">
+      <span class="coordXYZ">#${i + 1}<br>X: ${cp.orig.x.toFixed(3)} m<br>Y: ${cp.orig.y.toFixed(3)} m<br>Z(高さ): ${cp.orig.z.toFixed(3)} m</span>
+      <button data-idx="${i}" class="coordDelBtn">×</button>
+    </div>
+  `).join('');
+  coordList.querySelectorAll('.coordDelBtn').forEach(btn => {
+    btn.addEventListener('click', () => removeCoord(parseInt(btn.dataset.idx, 10)));
+  });
+}
+
+function removeCoord(idx) {
+  const cp = coordPoints[idx];
+  if (!cp) return;
+  scene.remove(cp.marker);
+  cp.marker.geometry.dispose();
+  cp.marker.material.dispose();
+  cp.label.remove();
+  coordPoints.splice(idx, 1);
+  relabelCoords();
+  renderCoordList();
+}
+
+function clearCoords() {
+  for (const cp of coordPoints) {
+    scene.remove(cp.marker);
+    cp.marker.geometry.dispose();
+    cp.marker.material.dispose();
+    cp.label.remove();
+  }
+  coordPoints.length = 0;
+  renderCoordList();
+}
+
+// ------------------------------------------------------------------
+// 断面カット機能（軸に沿ったクリッピング平面で点群を切断表示）
+// ------------------------------------------------------------------
+function setupClipping() {
+  clipToggleBtn.addEventListener('click', () => {
+    clipEnabled = !clipEnabled;
+    clipToggleBtn.classList.toggle('active', clipEnabled);
+    clipAxisRow.style.display = clipEnabled ? 'flex' : 'none';
+    clipPosRow.style.display = clipEnabled ? 'block' : 'none';
+    updateClipPlane();
+  });
+
+  clipFlipBtn.addEventListener('click', () => {
+    clipFlip = !clipFlip;
+    updateClipPlane();
+  });
+
+  clipAxisSelect.addEventListener('change', updateClipPlane);
+  clipSlider.addEventListener('input', updateClipPlane);
+}
+
+function resetClipping() {
+  clipEnabled = false;
+  clipFlip = false;
+  clipToggleBtn.classList.remove('active');
+  clipAxisRow.style.display = 'none';
+  clipPosRow.style.display = 'none';
+  clipAxisSelect.value = 'x';
+  clipSlider.value = 500;
+  updateClipPlane();
+}
+
+// 表示上の軸(元データの測量座標系。Zが高さ)を、内部Three.js座標系(Y-up)のプロパティ名へ変換
+const CLIP_AXIS_MAP = { x: 'x', y: 'z', z: 'y' };
+
+function updateClipPlane() {
+  if (!pointCloud || !clipBounds) return;
+  const axis = CLIP_AXIS_MAP[clipAxisSelect.value];
+  const min = clipBounds.min[axis];
+  const max = clipBounds.max[axis];
+  const t = clipSlider.value / 1000;
+  const pos = min + t * (max - min);
+
+  const sign = clipFlip ? -1 : 1;
+  clipPlane.normal.set(
+    axis === 'x' ? sign : 0,
+    axis === 'y' ? sign : 0,
+    axis === 'z' ? sign : 0
+  );
+  clipPlane.constant = -sign * pos;
+
+  pointCloud.material.clippingPlanes = clipEnabled ? [clipPlane] : [];
+  clipVal.textContent = pos.toFixed(2) + 'm';
+}
+
+initScene();
+loadInitial();
+</script>
+</body>
+</html>
